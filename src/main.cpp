@@ -177,18 +177,23 @@ void render() {
     }
 
     sandbox::gl::CommandBuffer commandBuffer;
-    sandbox::gl::ClearValue clearValue{{{0.4f, 0.6f, 0.9f, 1.0f}}};
-    sandbox::gl::AttachmentDescription attachmentDescriptions[] = {
-        {sandbox::gl::CLEAR_BUFFER_COLOR_BIT, sandbox::gl::ClearColorFormat::FLOAT, true},
-        {sandbox::gl::CLEAR_BUFFER_DEPTH_STENCIL_BIT, sandbox::gl::ClearColorFormat::FLOAT, true}
+    sandbox::gl::RenderingAttachmentInfo colorAttachments[] = {
+        {
+            .format = sandbox::gl::Format::B8G8R8A8_UNORM,
+            .loadOp = sandbox::gl::AttachmentLoadOp::CLEAR,
+            .clearValue = {{{0.4f, 0.6f, 0.9f, 1.0f}}}
+        }
+    };
+    sandbox::gl::RenderingAttachmentInfo depthAttachment = {
+        .format = sandbox::gl::Format::D24_UNORM_S8_UINT,
+        .loadOp = sandbox::gl::AttachmentLoadOp::CLEAR,
+        .clearValue = { .depthStencil = { .depth = 1.0f } }
     };
     commandBuffer.beginRenderPass({
-        .framebuffer = 0,
-        .clearValueCount = 1,
-        .clearValues = &clearValue
-    }, {
-        .attachmentCount = 2,
-        .attachments = attachmentDescriptions
+       .colorAttachmentCount = 1,
+       .colorAttachments = colorAttachments,
+       .depthAttachment = &depthAttachment,
+       .stencilAttachment = nullptr
     });
     commandBuffer.bindGraphicsPipeline(pipeline);
     constexpr GLintptr offset = 0;

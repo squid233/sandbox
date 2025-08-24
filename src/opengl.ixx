@@ -1,6 +1,6 @@
 module;
 
-#include <assert.h>
+#include <cassert>
 #include <glad/glad.h>
 
 export module sandbox.opengl;
@@ -178,59 +178,74 @@ namespace sandbox::gl {
         ClearDepthStencilValue depthStencil;
     };
 
-    export struct RenderPassBeginInfo {
-        GLuint framebuffer;
-        size_t clearValueCount;
-        const ClearValue* clearValues;
+    export enum class Format {
+        B8G8R8A8_UNORM = 44,
+        D16_UNORM = 124,
+        D32_SFLOAT = 126,
+        S8_UINT = 127,
+        D16_UNORM_S8_UINT = 128,
+        D24_UNORM_S8_UINT = 129,
+        D32_SFLOAT_S8_UINT = 130,
     };
 
-    export using ClearBuffer = std::uint32_t;
-    export constexpr ClearBuffer CLEAR_BUFFER_COLOR_BIT = 0b1;
-    export constexpr ClearBuffer CLEAR_BUFFER_DEPTH_STENCIL_BIT = 0b10;
-
-    export enum class ClearColorFormat {
-        FLOAT = 0,
-        INT32 = 1,
-        UINT32 = 2,
+    export enum class AttachmentLoadOp {
+        CLEAR = 1,
+        DONT_CARE = 2,
     };
 
-    export struct AttachmentDescription {
-        ClearBuffer clearBuffer;
-        ClearColorFormat clearColorFormat;
-        bool shouldClear;
+    export struct RenderingAttachmentInfo {
+        Format format;
+        AttachmentLoadOp loadOp;
+        ClearValue clearValue;
     };
 
-    export struct RenderPassInfo {
-        size_t attachmentCount;
-        const AttachmentDescription* attachments;
+    export struct RenderingInfo {
+        GLuint colorAttachmentCount;
+        const RenderingAttachmentInfo* colorAttachments;
+        const RenderingAttachmentInfo* depthAttachment;
+        const RenderingAttachmentInfo* stencilAttachment;
     };
 
     export class CommandBuffer {
         bool isInRenderPass_ = false;
         GraphicsPipeline* graphicsPipeline_ = nullptr;
     public:
-        void beginRenderPass(const RenderPassBeginInfo& beginInfo, const RenderPassInfo& renderPassInfo) {
+        void beginRenderPass(const RenderingInfo& renderingInfo) {
             assert(!isInRenderPass_);
             isInRenderPass_ = true;
-            for (size_t i = 0; i < beginInfo.clearValueCount; ++i) {
-                const auto& clearValue = beginInfo.clearValues[i];
-                if (const auto& attachmentDescription = renderPassInfo.attachments[i]; attachmentDescription.shouldClear) {
-                    if ((attachmentDescription.clearBuffer & CLEAR_BUFFER_COLOR_BIT) != 0) {
-                        switch (attachmentDescription.clearColorFormat) {
-                            case ClearColorFormat::FLOAT:
-                                glClearNamedFramebufferfv(beginInfo.framebuffer, GL_COLOR, 0, clearValue.color.float32);
-                                break;
-                            case ClearColorFormat::INT32:
-                                glClearNamedFramebufferiv(beginInfo.framebuffer, GL_COLOR, 0, clearValue.color.int32);
-                                break;
-                            case ClearColorFormat::UINT32:
-                                glClearNamedFramebufferuiv(beginInfo.framebuffer, GL_COLOR, 0, clearValue.color.uint32);
-                                break;
-                        }
+            for (GLuint i = 0; i < renderingInfo.colorAttachmentCount; ++i) {
+                const auto& colorAttachment = renderingInfo.colorAttachments[i];
+                if (colorAttachment.loadOp == AttachmentLoadOp::CLEAR) {
+                    if (colorAttachment.format == Format::B8G8R8A8_UNORM) {
+                        glClearNamedFramebufferfv(0, GL_COLOR, static_cast<GLint>(i), colorAttachment.clearValue.color.float32);
+                    } else {
+                        assert(false);
                     }
-                    if ((attachmentDescription.clearBuffer & CLEAR_BUFFER_DEPTH_STENCIL_BIT) != 0) {
-                        glClearNamedFramebufferfi(beginInfo.framebuffer, GL_DEPTH_STENCIL, 0, clearValue.depthStencil.depth, clearValue.depthStencil.stencil);
-                    }
+                }
+            }
+            if (renderingInfo.depthAttachment != nullptr && renderingInfo.depthAttachment->loadOp == AttachmentLoadOp::CLEAR) {
+                switch (renderingInfo.depthAttachment->format) {
+                    case Format::D16_UNORM:
+                    case Format::D16_UNORM_S8_UINT:
+                    case Format::D24_UNORM_S8_UINT:
+                    case Format::D32_SFLOAT:
+                    case Format::D32_SFLOAT_S8_UINT:
+                        glClearNamedFramebufferfv(0, GL_DEPTH, 0, &renderingInfo.depthAttachment->clearValue.depthStencil.depth);
+                        break;
+                    default:
+                        assert(false);
+                }
+            }
+            if (renderingInfo.stencilAttachment != nullptr && renderingInfo.stencilAttachment->loadOp == AttachmentLoadOp::CLEAR) {
+                switch (renderingInfo.stencilAttachment->format) {
+                    case Format::S8_UINT:
+                    case Format::D16_UNORM_S8_UINT:
+                    case Format::D24_UNORM_S8_UINT:
+                    case Format::D32_SFLOAT_S8_UINT:
+                        glClearNamedFramebufferuiv(0, GL_STENCIL, 0, &renderingInfo.stencilAttachment->clearValue.depthStencil.stencil);
+                        break;
+                    default:
+                        assert(false);
                 }
             }
         }
