@@ -15,14 +15,18 @@ find_package(tinyfiledialogs CONFIG REQUIRED)
 add_executable(sandbox src/main.cpp)
 
 if (MSVC)
-    set_target_properties(sandbox PROPERTIES WIN32_EXECUTABLE TRUE)
+    if (CMAKE_BUILD_TYPE EQUAL "Release")
+        set_target_properties(sandbox PROPERTIES WIN32_EXECUTABLE TRUE)
+    endif ()
     target_sources(sandbox PRIVATE FILE_SET CXX_MODULES BASE_DIRS $ENV{VCToolsInstallDir}
             FILES $ENV{VCToolsInstallDir}/modules/std.ixx)
 endif ()
+
 target_sources(sandbox PRIVATE FILE_SET CXX_MODULES BASE_DIRS .
         FILES
         src/file.ixx
         src/log.ixx
+        src/opengl.ixx
         src/tinyfd.ixx
 )
 

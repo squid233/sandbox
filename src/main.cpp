@@ -10,6 +10,7 @@
 import std;
 import sandbox.file;
 import sandbox.log;
+import sandbox.opengl;
 import sandbox.tinyfd;
 
 constexpr int WIDTH = 854;
@@ -17,8 +18,7 @@ constexpr int HEIGHT = 480;
 GLFWwindow* window = nullptr;
 bool framebufferResized = false;
 
-GLuint program = 0;
-GLuint vao = 0;
+sandbox::gl::GraphicsPipeline* pipeline = nullptr;
 GLuint vbo = 0;
 GLuint ibo = 0;
 
@@ -28,38 +28,13 @@ struct Vertex {
 };
 
 constexpr std::array vertices = {
-    Vertex{{0.0f, 0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}},
-    Vertex{{-0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}},
-    Vertex{{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}},
+    Vertex{{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+    Vertex{{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
+    Vertex{{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}},
+    Vertex{{1.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}},
 };
 constexpr std::array indices = {
-    0, 1, 2
-};
-
-class GLShaderModule {
-    GLenum type_;
-    GLuint shader = 0;
-public:
-    explicit GLShaderModule(const GLenum type) : type_(type) {
-        shader = glCreateShader(type);
-    }
-
-    ~GLShaderModule() {
-        glDeleteShader(shader);
-    }
-
-    GLShaderModule(const GLShaderModule&) = delete;
-    GLShaderModule& operator=(const GLShaderModule&) = delete;
-    GLShaderModule(GLShaderModule&&) = delete;
-    GLShaderModule& operator=(GLShaderModule&&) = delete;
-
-    [[nodiscard]] GLuint handle() const {
-        return shader;
-    }
-
-    [[nodiscard]] GLenum type() const {
-        return type_;
-    }
+    0, 1, 2, 2, 3, 0
 };
 
 void errorCallback(int errorCode, const char* description) {
@@ -126,7 +101,7 @@ Message: {})",
 }
 #endif
 
-bool compileShader(const GLShaderModule& module, const std::string& filename) {
+bool compileShader(const sandbox::gl::ShaderModule& module, const std::string& filename) {
     const auto& optional = sandbox::file::readFile(filename);
     if (!optional.has_value()) {
         return false;
@@ -156,7 +131,7 @@ void bufferStorage(const GLuint buffer, std::array<T, count> data, const GLbitfi
     glNamedBufferStorage(buffer, count * sizeof(T), data.data(), flags);
 }
 
-void initGL() {
+bool initGL() {
     glfwMakeContextCurrent(window);
     gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress));
 
@@ -164,40 +139,33 @@ void initGL() {
     setupGLDebugCallback();
 #endif
 
-    program = glCreateProgram();
-    const GLShaderModule vertexShaderModule{GL_VERTEX_SHADER};
-    const GLShaderModule fragmentShaderModule{GL_FRAGMENT_SHADER};
-    compileShader(vertexShaderModule, "res/shader/shader.vert");
-    compileShader(fragmentShaderModule, "res/shader/shader.frag");
-    glAttachShader(program, vertexShaderModule.handle());
-    glAttachShader(program, fragmentShaderModule.handle());
-    glLinkProgram(program);
-    int success;
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    if (!success) {
-        int infoLogLength;
-        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLogLength);
-        const auto infoLog = new char[infoLogLength + 1];
-        glGetProgramInfoLog(program, infoLogLength, &infoLogLength, infoLog);
-        sandbox::log::error(std::format("Failed to link program {}: {}", program, infoLog));
-        delete[] infoLog;
+    constexpr auto bindingDescription = sandbox::gl::BindingDescription{
+        .binding = 0,
+        .stride = sizeof(Vertex),
+    };
+    constexpr sandbox::gl::AttributeDescription attributeDescriptions[] = {
+        {0, 0, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, position)},
+        {1, 0, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, color)},
+    };
+    pipeline = new sandbox::gl::GraphicsPipeline({
+        .vertexShaderFilename = "res/shader/shader.vert",
+        .fragmentShaderFilename = "res/shader/shader.frag",
+        .bindingDescriptionCount = 1,
+        .bindingDescriptions = &bindingDescription,
+        .attributeDescriptionCount = 2,
+        .attributeDescriptions = attributeDescriptions,
+    });
+    if (pipeline == nullptr || !pipeline->create()) {
+        return false;
     }
 
-    glCreateVertexArrays(1, &vao);
     glCreateBuffers(1, &vbo);
     glCreateBuffers(1, &ibo);
 
     bufferStorage(vbo, vertices, 0);
     bufferStorage(ibo, indices, 0);
 
-    glVertexArrayVertexBuffer(vao, 0, vbo, 0, sizeof(Vertex));
-    glVertexArrayAttribBinding(vao, 0, 0);
-    glVertexArrayAttribBinding(vao, 1, 0);
-    glVertexArrayAttribFormat(vao, 0, 3, GL_FLOAT, GL_FALSE, offsetof(Vertex, position));
-    glVertexArrayAttribFormat(vao, 1, 4, GL_FLOAT, GL_FALSE, offsetof(Vertex, color));
-    glEnableVertexArrayAttrib(vao, 0);
-    glEnableVertexArrayAttrib(vao, 1);
-    glVertexArrayElementBuffer(vao, ibo);
+    return true;
 }
 
 void render() {
@@ -208,23 +176,34 @@ void render() {
         framebufferResized = false;
     }
 
-    constexpr float clearColor[] = {0.4f, 0.6f, 0.9f, 1.0f};
-    glClearNamedFramebufferfv(0, GL_COLOR, 0, clearColor);
-
-    glUseProgram(program);
-    glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindVertexArray(0);
-    glUseProgram(0);
+    sandbox::gl::CommandBuffer commandBuffer;
+    sandbox::gl::ClearValue clearValue{{{0.4f, 0.6f, 0.9f, 1.0f}}};
+    sandbox::gl::AttachmentDescription attachmentDescriptions[] = {
+        {sandbox::gl::CLEAR_BUFFER_COLOR_BIT, sandbox::gl::ClearColorFormat::FLOAT, true},
+        {sandbox::gl::CLEAR_BUFFER_DEPTH_STENCIL_BIT, sandbox::gl::ClearColorFormat::FLOAT, true}
+    };
+    commandBuffer.beginRenderPass({
+        .framebuffer = 0,
+        .clearValueCount = 1,
+        .clearValues = &clearValue
+    }, {
+        .attachmentCount = 2,
+        .attachments = attachmentDescriptions
+    });
+    commandBuffer.bindGraphicsPipeline(pipeline);
+    constexpr GLintptr offset = 0;
+    commandBuffer.bindVertexBuffers(0, 1, &vbo, &offset);
+    commandBuffer.bindIndexBuffer(ibo);
+    commandBuffer.drawIndexed(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT);
+    commandBuffer.endRenderPass();
 
     glfwSwapBuffers(window);
 }
 
 void dispose() {
-    glDeleteVertexArrays(1, &vao);
     glDeleteBuffers(1, &vbo);
     glDeleteBuffers(1, &ibo);
-    glDeleteProgram(program);
+    delete pipeline;
 
     glfwDestroyWindow(window);
     glfwTerminate();
@@ -272,11 +251,11 @@ GLFW error {}: {})", error, description).c_str());
         framebufferResized = true;
     });
 
-    initGL();
-
-    while (!glfwWindowShouldClose(window)) {
-        render();
-        glfwPollEvents();
+    if (initGL()) {
+        while (!glfwWindowShouldClose(window)) {
+            render();
+            glfwPollEvents();
+        }
     }
 
     dispose();
