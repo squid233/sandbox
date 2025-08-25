@@ -3,7 +3,7 @@ module;
 #include <cassert>
 #include <glad/glad.h>
 
-export module sandbox.opengl;
+export module sandbox.gl;
 
 import std;
 import sandbox.gl.buffer;

@@ -11,12 +11,13 @@
 #include <glm/gtc/type_ptr.hpp>
 
 import std;
+import sandbox.gl;
 import sandbox.gl.buffer;
 import sandbox.gl.descriptor;
 import sandbox.gl.pipeline;
 import sandbox.io;
 import sandbox.log;
-import sandbox.opengl;
+import sandbox.timer;
 import sandbox.tinyfd;
 
 constexpr int WIDTH = 854;
@@ -25,8 +26,10 @@ GLFWwindow* window = nullptr;
 int framebufferWidth = WIDTH;
 int framebufferHeight = HEIGHT;
 bool framebufferResized = false;
+constexpr bool VSYNC_ENABLED = false;
 
-double lastFrameTime = 0;
+sandbox::timer::FixedUpdateTimer timer{glfwGetTime, 20};
+std::uint64_t gameTicks = 0;
 
 glm::dvec3 previousPosition{};
 glm::dvec3 position{};
@@ -113,6 +116,7 @@ std::string debugSeverity(GLenum severity) {
 }
 
 void setupGLDebugCallback() {
+    glEnable(GL_DEBUG_OUTPUT);
     glDebugMessageCallback([](const GLenum source, const GLenum type, const GLuint id, const GLenum severity, GLsizei, const GLchar* message, const void*) {
         sandbox::log::func_t func;
         if (severity == GL_DEBUG_SEVERITY_HIGH) {
@@ -140,6 +144,7 @@ Message: {})",
 bool initGL() {
     glfwMakeContextCurrent(window);
     gladLoadGLLoader([](const char* name) noexcept -> void* { return glfwGetProcAddress(name); });
+    glfwSwapInterval(VSYNC_ENABLED ? 1 : 0);
 
 #ifdef _DEBUG
     setupGLDebugCallback();
@@ -190,7 +195,7 @@ bool initGL() {
     return true;
 }
 
-void update(const double deltaTime) {
+void tick() {
     previousPosition = position;
 
     double deltaX = 0, deltaY = 0, deltaZ = 0;
@@ -200,16 +205,18 @@ void update(const double deltaTime) {
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) ++deltaX;
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) --deltaY;
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) ++deltaY;
-    const double speed = 2.0f * deltaTime;
+    constexpr double speed = 0.05;
     position += speed * glm::dvec3(deltaX, deltaY, deltaZ);
 }
 
-void render() {
+void render(const double partialTick) {
     if (framebufferResized) {
         glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
         glViewport(0, 0, framebufferWidth, framebufferHeight);
         framebufferResized = false;
     }
+
+    const auto& lerpPosition = glm::vec3(glm::mix(previousPosition, position, partialTick));
 
     transformation.Projection = glm::perspective(
         glm::radians(70.0f),
@@ -218,8 +225,8 @@ void render() {
         100.0f
     );
     transformation.View = glm::lookAt(
-        glm::vec3(position),
-        glm::vec3(position) - glm::vec3(0, 0, 1),
+        lerpPosition,
+        lerpPosition - glm::vec3(0, 0, 1),
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
     transformation.Model = glm::identity<glm::mat4>();
@@ -293,6 +300,9 @@ GLFW error {}: {})", error, description).c_str());
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#ifdef _DEBUG
+    glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
+#endif
     window = glfwCreateWindow(WIDTH, HEIGHT, "Sandbox", nullptr, nullptr);
     if (window == nullptr) {
         const char* description;
@@ -307,18 +317,18 @@ GLFW error {}: {})", error, description).c_str());
     });
 
     if (initGL()) {
-        lastFrameTime = glfwGetTime();
-
+        timer.advanceTime();
         while (!glfwWindowShouldClose(window)) {
-            const double currentTime = glfwGetTime();
-            const double deltaTime = currentTime - lastFrameTime;
-            lastFrameTime = currentTime;
-            glfwPollEvents();
-            update(deltaTime);
-            if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
-                continue;
+            timer.advanceTime();
+            for (std::uint32_t i = 0, ticks = timer.tickCount(); i < ticks; ++i) {
+                tick();
+                ++gameTicks;
             }
-            render();
+            glfwPollEvents();
+            if (!glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+                render(timer.partialTick());
+            }
+            timer.calculateFps();
         }
     }
 

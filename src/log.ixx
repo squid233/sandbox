@@ -12,7 +12,16 @@ namespace sandbox::log {
         log4cxx::PropertyConfigurator::configure("res/log4cxx.properties");
     }
 
-    export using func_t = void(*)(const std::string_view&);
+    export using func_t = void (*)(const std::string_view&);
+
+    export void debug(const std::string_view& message) {
+        static log4cxx::LoggerPtr file = log4cxx::Logger::getLogger("file");
+        LOG4CXX_DEBUG(file, message);
+#ifdef _DEBUG
+        static log4cxx::LoggerPtr console = log4cxx::Logger::getLogger("console");
+        LOG4CXX_DEBUG(console, message);
+#endif
+    }
 
     export void info(const std::string_view& message) {
         static log4cxx::LoggerPtr file = log4cxx::Logger::getLogger("file");
