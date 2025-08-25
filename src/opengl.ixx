@@ -6,162 +6,13 @@ module;
 export module sandbox.opengl;
 
 import std;
-import sandbox.file;
+import sandbox.gl.buffer;
+import sandbox.gl.descriptor;
+import sandbox.gl.pipeline;
+import sandbox.io;
 import sandbox.log;
 
 namespace sandbox::gl {
-    export struct BindingDescription {
-        GLuint binding;
-        GLsizei stride;
-    };
-
-    export struct AttributeDescription {
-        GLuint location;
-        GLuint binding;
-        GLint size;
-        GLenum type;
-        GLboolean normalized;
-        GLuint offset;
-    };
-
-    export class ShaderModule {
-        GLuint handle_;
-        GLenum type_;
-    public:
-        explicit ShaderModule(const GLenum type) : handle_(glCreateShader(type)), type_(type) {}
-        ~ShaderModule() {
-            glDeleteShader(handle_);
-        }
-
-        ShaderModule(const ShaderModule& other) = delete;
-        ShaderModule& operator=(const ShaderModule& other) = delete;
-        ShaderModule(ShaderModule&& other) = delete;
-        ShaderModule& operator=(ShaderModule&& other) = delete;
-
-        bool compile(const std::string& filename) const {
-            const auto& optional = file::readFile(filename);
-            if (!optional.has_value()) {
-                return false;
-            }
-            const auto& string = optional.value();
-            const char* cStr = string.c_str();
-
-            glShaderSource(handle_, 1, &cStr, nullptr);
-            glCompileShader(handle_);
-
-            int success;
-            glGetShaderiv(handle_, GL_COMPILE_STATUS, &success);
-            if (!success) {
-                int infoLogLength;
-                glGetShaderiv(handle_, GL_INFO_LOG_LENGTH, &infoLogLength);
-                const auto infoLog = new char[infoLogLength + 1];
-                glGetShaderInfoLog(handle_, infoLogLength, &infoLogLength, infoLog);
-                log::error(std::format("Failed to compile {} shader {}: {}", type_, handle_, infoLog));
-                delete[] infoLog;
-                return false;
-            }
-
-            return true;
-        }
-
-        GLuint handle() const { return handle_; }
-        GLenum type() const { return type_; }
-    };
-
-    export struct PipelineInfo {
-        std::string vertexShaderFilename;
-        std::string fragmentShaderFilename;
-        size_t bindingDescriptionCount;
-        const BindingDescription* bindingDescriptions;
-        size_t attributeDescriptionCount;
-        const AttributeDescription* attributeDescriptions;
-    };
-
-    export class GraphicsPipeline {
-        PipelineInfo* pipelineInfo_;
-        GLuint handle_;
-        GLuint vertexArray_;
-    public:
-        explicit GraphicsPipeline(const PipelineInfo& pipelineInfo) :
-            handle_(glCreateProgram()) {
-            glCreateVertexArrays(1, &vertexArray_);
-
-            pipelineInfo_ = new PipelineInfo();
-            pipelineInfo_->vertexShaderFilename = pipelineInfo.vertexShaderFilename;
-            pipelineInfo_->fragmentShaderFilename = pipelineInfo.fragmentShaderFilename;
-            pipelineInfo_->bindingDescriptionCount = pipelineInfo.bindingDescriptionCount;
-            pipelineInfo_->bindingDescriptions = new BindingDescription[pipelineInfo.bindingDescriptionCount];
-            std::memcpy(const_cast<BindingDescription *>(pipelineInfo_->bindingDescriptions),
-                        pipelineInfo.bindingDescriptions,
-                        pipelineInfo.bindingDescriptionCount * sizeof(BindingDescription));
-            pipelineInfo_->attributeDescriptionCount = pipelineInfo.attributeDescriptionCount;
-            pipelineInfo_->attributeDescriptions = new AttributeDescription[pipelineInfo.attributeDescriptionCount];
-            std::memcpy(const_cast<AttributeDescription *>(pipelineInfo_->attributeDescriptions),
-                        pipelineInfo.attributeDescriptions,
-                        pipelineInfo.attributeDescriptionCount * sizeof(AttributeDescription));
-        }
-
-        ~GraphicsPipeline() {
-            glDeleteProgram(handle_);
-            glDeleteVertexArrays(1, &vertexArray_);
-            delete pipelineInfo_->bindingDescriptions;
-            delete pipelineInfo_->attributeDescriptions;
-            delete pipelineInfo_;
-        }
-
-        GraphicsPipeline(const GraphicsPipeline& other) = delete;
-        GraphicsPipeline& operator=(const GraphicsPipeline& other) = delete;
-        GraphicsPipeline(GraphicsPipeline&& other) = delete;
-        GraphicsPipeline& operator=(GraphicsPipeline&& other) = delete;
-
-        bool create() {
-            const ShaderModule vertexShader{GL_VERTEX_SHADER};
-            if (!vertexShader.compile(pipelineInfo_->vertexShaderFilename)) {
-                return false;
-            }
-            const ShaderModule fragmentShader{GL_FRAGMENT_SHADER};
-            if (!fragmentShader.compile(pipelineInfo_->fragmentShaderFilename)) {
-                return false;
-            }
-            glAttachShader(handle_, vertexShader.handle());
-            glAttachShader(handle_, fragmentShader.handle());
-            glLinkProgram(handle_);
-
-            int success;
-            glGetProgramiv(handle_, GL_LINK_STATUS, &success);
-            if (!success) {
-                int infoLogLength;
-                glGetProgramiv(handle_, GL_INFO_LOG_LENGTH, &infoLogLength);
-                const auto infoLog = new char[infoLogLength + 1];
-                glGetProgramInfoLog(handle_, infoLogLength, &infoLogLength, infoLog);
-                log::error(std::format("Failed to link program {}: {}", handle_, infoLog));
-                delete[] infoLog;
-            }
-
-            glDetachShader(handle_, vertexShader.handle());
-            glDetachShader(handle_, fragmentShader.handle());
-
-            for (size_t i = 0; i < pipelineInfo_->attributeDescriptionCount; ++i) {
-                const auto& [location, binding, size, type, normalized, offset] =
-                    pipelineInfo_->attributeDescriptions[i];
-                glVertexArrayAttribBinding(vertexArray_, location, binding);
-                glVertexArrayAttribFormat(vertexArray_, location, size, type, normalized, offset);
-                glEnableVertexArrayAttrib(vertexArray_, location);
-            }
-
-            return true;
-        }
-
-        void bind() const {
-            glUseProgram(handle_);
-            glBindVertexArray(vertexArray_);
-        }
-
-        const PipelineInfo* pipelineInfo() const { return pipelineInfo_; }
-        GLuint handle() const { return handle_; }
-        GLuint vertexArray() const { return vertexArray_; }
-    };
-
     export union ClearColorValue {
         GLfloat float32[4];
         GLint int32[4];
@@ -209,6 +60,7 @@ namespace sandbox::gl {
     export class CommandBuffer {
         bool isInRenderPass_ = false;
         GraphicsPipeline* graphicsPipeline_ = nullptr;
+        std::vector<GLuint> uniformBufferBinding_{};
     public:
         void beginRenderPass(const RenderingInfo& renderingInfo) {
             assert(!isInRenderPass_);
@@ -232,6 +84,8 @@ namespace sandbox::gl {
                     case Format::D32_SFLOAT_S8_UINT:
                         glClearNamedFramebufferfv(0, GL_DEPTH, 0, &renderingInfo.depthAttachment->clearValue.depthStencil.depth);
                         break;
+                    case Format::B8G8R8A8_UNORM:
+                    case Format::S8_UINT:
                     default:
                         assert(false);
                 }
@@ -244,6 +98,9 @@ namespace sandbox::gl {
                     case Format::D32_SFLOAT_S8_UINT:
                         glClearNamedFramebufferuiv(0, GL_STENCIL, 0, &renderingInfo.stencilAttachment->clearValue.depthStencil.stencil);
                         break;
+                    case Format::B8G8R8A8_UNORM:
+                    case Format::D16_UNORM:
+                    case Format::D32_SFLOAT:
                     default:
                         assert(false);
                 }
@@ -255,13 +112,27 @@ namespace sandbox::gl {
             graphicsPipeline_ = graphicsPipeline;
         }
 
+        void bindDescriptorSet(const DescriptorSet& set) {
+            assert(isInRenderPass_);
+            for (const auto& [binding, descriptor] : set.descriptors()) {
+                switch (descriptor->type()) {
+                    case DescriptorType::UNIFORM_BUFFER:
+                        const auto& info = dynamic_cast<UniformBufferDescriptor*>(descriptor)->info();
+                        assert(info.buffer != nullptr);
+                        glBindBufferRange(GL_UNIFORM_BUFFER, binding, info.buffer->handle(), info.offset, info.range);
+                        uniformBufferBinding_.emplace_back(binding);
+                        break;
+                }
+            }
+        }
+
         void bindVertexBuffers(const GLuint firstBinding, const GLsizei bindingCount, const GLuint* pBuffers, const GLintptr* pOffsets) const {
             assert(isInRenderPass_);
             assert(graphicsPipeline_ != nullptr);
             const auto& info = graphicsPipeline_->pipelineInfo();
-            const auto& strides = new GLsizei[bindingCount]{};
-            for (size_t i = 0; i < bindingCount; ++i) {
-                for (size_t j = 0; j < info->bindingDescriptionCount; ++j) {
+            const auto& strides = new GLsizei[static_cast<size_t>(bindingCount)]{};
+            for (GLsizei i = 0; i < bindingCount; ++i) {
+                for (GLuint j = 0; j < info->bindingDescriptionCount; ++j) {
                     if (const auto& [binding, stride] = info->bindingDescriptions[j]; firstBinding + i == binding) {
                         strides[i] = stride;
                     }
@@ -271,10 +142,23 @@ namespace sandbox::gl {
             delete[] strides;
         }
 
-        void bindIndexBuffer(const GLuint buffer) const {
+        void bindVertexBuffer(const GLuint binding, const Buffer& buffer, const GLintptr offset) const {
             assert(isInRenderPass_);
             assert(graphicsPipeline_ != nullptr);
-            glVertexArrayElementBuffer(graphicsPipeline_->vertexArray(), buffer);
+            const auto& info = graphicsPipeline_->pipelineInfo();
+            GLsizei stride = 0;
+            for (GLuint i = 0; i < info->bindingDescriptionCount; ++i) {
+                if (const auto& bindingDescription = info->bindingDescriptions[i]; binding == bindingDescription.binding) {
+                    stride = bindingDescription.stride;
+                }
+            }
+            glVertexArrayVertexBuffer(graphicsPipeline_->vertexArray(), binding, buffer.handle(), offset, stride);
+        }
+
+        void bindIndexBuffer(const Buffer& buffer) const {
+            assert(isInRenderPass_);
+            assert(graphicsPipeline_ != nullptr);
+            glVertexArrayElementBuffer(graphicsPipeline_->vertexArray(), buffer.handle());
         }
 
         void drawIndexed(const GLenum mode, const GLsizei count, const GLenum type) const {
@@ -289,6 +173,11 @@ namespace sandbox::gl {
             glUseProgram(0);
             glBindVertexArray(0);
             isInRenderPass_ = false;
+            graphicsPipeline_ = nullptr;
+            for (const auto& binding : uniformBufferBinding_) {
+                glBindBufferBase(GL_UNIFORM_BUFFER, binding, 0);
+            }
+            uniformBufferBinding_.clear();
         }
     };
 }

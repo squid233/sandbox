@@ -5,10 +5,16 @@
 #include <glad/glad.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 import std;
-import sandbox.file;
+import sandbox.gl.buffer;
+import sandbox.gl.descriptor;
+import sandbox.gl.pipeline;
+import sandbox.io;
 import sandbox.log;
 import sandbox.opengl;
 import sandbox.tinyfd;
@@ -16,11 +22,14 @@ import sandbox.tinyfd;
 constexpr int WIDTH = 854;
 constexpr int HEIGHT = 480;
 GLFWwindow* window = nullptr;
+int framebufferWidth = WIDTH;
+int framebufferHeight = HEIGHT;
 bool framebufferResized = false;
 
-sandbox::gl::GraphicsPipeline* pipeline = nullptr;
-GLuint vbo = 0;
-GLuint ibo = 0;
+double lastFrameTime = 0;
+
+glm::dvec3 previousPosition{};
+glm::dvec3 position{};
 
 struct Vertex {
     glm::vec3 position;
@@ -37,7 +46,34 @@ constexpr std::array indices = {
     0, 1, 2, 2, 3, 0
 };
 
-void errorCallback(int errorCode, const char* description) {
+struct Transformation {
+    glm::mat4 Projection;
+    glm::mat4 View;
+    glm::mat4 Model;
+};
+
+constexpr sandbox::gl::DescriptorSetLayoutBinding transformationSetLayoutBindings[] = {
+    {
+        .binding = 0,
+        .type = sandbox::gl::DescriptorType::UNIFORM_BUFFER
+    }
+};
+sandbox::gl::DescriptorSet transformationDescriptorSet{
+    sandbox::gl::DescriptorSetLayoutInfo{
+        .bindingCount = sizeof(transformationSetLayoutBindings) / sizeof(sandbox::gl::DescriptorSetLayoutBinding),
+        .bindings = transformationSetLayoutBindings
+    }};
+sandbox::gl::Buffer* transformationBuffer = nullptr;
+Transformation* transformationBufferData = nullptr;
+Transformation transformation{};
+
+sandbox::gl::GraphicsPipeline* pipeline = nullptr;
+sandbox::gl::Buffer* vertexBuffer = nullptr;
+sandbox::gl::Buffer* indexBuffer = nullptr;
+
+sandbox::gl::CommandBuffer commandBuffer{};
+
+void errorCallback(int errorCode, const char* description) noexcept {
     sandbox::log::error(std::format("GLFW error {}: {}", errorCode, description));
 }
 
@@ -77,7 +113,7 @@ std::string debugSeverity(GLenum severity) {
 }
 
 void setupGLDebugCallback() {
-    glDebugMessageCallback([](GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const void *userParam) {
+    glDebugMessageCallback([](const GLenum source, const GLenum type, const GLuint id, const GLenum severity, GLsizei, const GLchar* message, const void*) {
         sandbox::log::func_t func;
         if (severity == GL_DEBUG_SEVERITY_HIGH) {
             func = sandbox::log::error;
@@ -101,43 +137,29 @@ Message: {})",
 }
 #endif
 
-bool compileShader(const sandbox::gl::ShaderModule& module, const std::string& filename) {
-    const auto& optional = sandbox::file::readFile(filename);
-    if (!optional.has_value()) {
-        return false;
-    }
-    const auto& string = optional.value();
-    const char* const cStr = string.c_str();
-
-    const GLuint handle = module.handle();
-    glShaderSource(handle, 1, &cStr, nullptr);
-    glCompileShader(handle);
-    int success;
-    glGetShaderiv(handle, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        int infoLogLength;
-        glGetShaderiv(handle, GL_INFO_LOG_LENGTH, &infoLogLength);
-        const auto infoLog = new char[infoLogLength + 1];
-        glGetShaderInfoLog(handle, infoLogLength, &infoLogLength, infoLog);
-        sandbox::log::error(std::format("Failed to compile {} shader {}: {}", module.type(), handle, infoLog));
-        delete[] infoLog;
-        return false;
-    }
-    return true;
-}
-
-template<typename T, GLsizeiptr count>
-void bufferStorage(const GLuint buffer, std::array<T, count> data, const GLbitfield flags) {
-    glNamedBufferStorage(buffer, count * sizeof(T), data.data(), flags);
-}
-
 bool initGL() {
     glfwMakeContextCurrent(window);
-    gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress));
+    gladLoadGLLoader([](const char* name) noexcept -> void* { return glfwGetProcAddress(name); });
 
 #ifdef _DEBUG
     setupGLDebugCallback();
 #endif
+
+    transformationBuffer = new sandbox::gl::Buffer();
+    transformationBuffer->storage(sizeof(Transformation), nullptr, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+    transformationBufferData = static_cast<Transformation*>(transformationBuffer->map(GL_WRITE_ONLY));
+
+    const sandbox::gl::DescriptorBufferInfo bufferInfo{
+        .buffer = transformationBuffer,
+        .offset = 0,
+        .range = sizeof(Transformation),
+    };
+    const sandbox::gl::WriteDescriptorSet write{
+        .dstBinding = 0,
+        .descriptorType = sandbox::gl::DescriptorType::UNIFORM_BUFFER,
+        .bufferInfo = &bufferInfo,
+    };
+    transformationDescriptorSet.update(1, &write);
 
     constexpr auto bindingDescription = sandbox::gl::BindingDescription{
         .binding = 0,
@@ -155,28 +177,54 @@ bool initGL() {
         .attributeDescriptionCount = 2,
         .attributeDescriptions = attributeDescriptions,
     });
-    if (pipeline == nullptr || !pipeline->create()) {
+    if (!pipeline->create()) {
         return false;
     }
 
-    glCreateBuffers(1, &vbo);
-    glCreateBuffers(1, &ibo);
+    vertexBuffer = new sandbox::gl::Buffer();
+    indexBuffer = new sandbox::gl::Buffer();
 
-    bufferStorage(vbo, vertices, 0);
-    bufferStorage(ibo, indices, 0);
+    vertexBuffer->storage(sizeof(vertices), vertices.data(), 0);
+    indexBuffer->storage(sizeof(indices), indices.data(), 0);
 
     return true;
 }
 
+void update(const double deltaTime) {
+    previousPosition = position;
+
+    double deltaX = 0, deltaY = 0, deltaZ = 0;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) --deltaZ;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) ++deltaZ;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) --deltaX;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) ++deltaX;
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) --deltaY;
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) ++deltaY;
+    const double speed = 2.0f * deltaTime;
+    position += speed * glm::dvec3(deltaX, deltaY, deltaZ);
+}
+
 void render() {
     if (framebufferResized) {
-        int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
-        glViewport(0, 0, width, height);
+        glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+        glViewport(0, 0, framebufferWidth, framebufferHeight);
         framebufferResized = false;
     }
 
-    sandbox::gl::CommandBuffer commandBuffer;
+    transformation.Projection = glm::perspective(
+        glm::radians(70.0f),
+        static_cast<float>(framebufferWidth) / static_cast<float>(framebufferHeight),
+        0.01f,
+        100.0f
+    );
+    transformation.View = glm::lookAt(
+        glm::vec3(position),
+        glm::vec3(position) - glm::vec3(0, 0, 1),
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
+    transformation.Model = glm::identity<glm::mat4>();
+    std::memcpy(transformationBufferData, &transformation, sizeof(Transformation));
+
     sandbox::gl::RenderingAttachmentInfo colorAttachments[] = {
         {
             .format = sandbox::gl::Format::B8G8R8A8_UNORM,
@@ -196,18 +244,20 @@ void render() {
        .stencilAttachment = nullptr
     });
     commandBuffer.bindGraphicsPipeline(pipeline);
-    constexpr GLintptr offset = 0;
-    commandBuffer.bindVertexBuffers(0, 1, &vbo, &offset);
-    commandBuffer.bindIndexBuffer(ibo);
-    commandBuffer.drawIndexed(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT);
+    commandBuffer.bindDescriptorSet(transformationDescriptorSet);
+    commandBuffer.bindVertexBuffer(0, *vertexBuffer, 0);
+    commandBuffer.bindIndexBuffer(*indexBuffer);
+    commandBuffer.drawIndexed(GL_TRIANGLES, static_cast<const GLsizei>(indices.size()), GL_UNSIGNED_INT);
     commandBuffer.endRenderPass();
 
     glfwSwapBuffers(window);
 }
 
 void dispose() {
-    glDeleteBuffers(1, &vbo);
-    glDeleteBuffers(1, &ibo);
+    transformationBuffer->unmap();
+    delete transformationBuffer;
+    delete vertexBuffer;
+    delete indexBuffer;
     delete pipeline;
 
     glfwDestroyWindow(window);
@@ -252,14 +302,23 @@ GLFW error {}: {})", error, description).c_str());
         glfwTerminate();
         return -1;
     }
-    glfwSetFramebufferSizeCallback(window, [](GLFWwindow *window, int width, int height) {
+    glfwSetFramebufferSizeCallback(window, [](GLFWwindow*, int, int) noexcept {
         framebufferResized = true;
     });
 
     if (initGL()) {
+        lastFrameTime = glfwGetTime();
+
         while (!glfwWindowShouldClose(window)) {
-            render();
+            const double currentTime = glfwGetTime();
+            const double deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
             glfwPollEvents();
+            update(deltaTime);
+            if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+                continue;
+            }
+            render();
         }
     }
 

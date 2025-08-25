@@ -12,22 +12,28 @@ find_package(log4cxx CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(tinyfiledialogs CONFIG REQUIRED)
 
+add_compile_options("-Wall")
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/source-charset:utf-8>" "$<$<CXX_COMPILER_ID:MSVC>:/execution-charset:utf-8>")
+
 add_executable(sandbox src/main.cpp)
 
 if (MSVC)
     if (CMAKE_BUILD_TYPE EQUAL "Release")
         set_target_properties(sandbox PROPERTIES WIN32_EXECUTABLE TRUE)
     endif ()
-    target_sources(sandbox PRIVATE FILE_SET CXX_MODULES BASE_DIRS $ENV{VCToolsInstallDir}
+    target_sources(sandbox PRIVATE FILE_SET msvcStdModule TYPE CXX_MODULES BASE_DIRS $ENV{VCToolsInstallDir}
             FILES $ENV{VCToolsInstallDir}/modules/std.ixx)
 endif ()
 
 target_sources(sandbox PRIVATE FILE_SET CXX_MODULES BASE_DIRS .
         FILES
-        src/file.ixx
+        src/io.ixx
         src/log.ixx
         src/opengl.ixx
         src/tinyfd.ixx
+        src/gl/buffer.ixx
+        src/gl/descriptor.ixx
+        src/gl/pipeline.ixx
 )
 
 target_link_libraries(sandbox PRIVATE

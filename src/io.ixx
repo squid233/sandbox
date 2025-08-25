@@ -1,9 +1,9 @@
-export module sandbox.file;
+export module sandbox.io;
 
 import std;
 import sandbox.log;
 
-namespace sandbox::file {
+namespace sandbox::io {
     export std::optional<std::string> readFile(const std::string& filename) {
         std::ifstream stream{filename};
         if (!stream.is_open()) {
