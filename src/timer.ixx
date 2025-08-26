@@ -15,8 +15,8 @@ namespace sandbox::timer {
         double deltaTime_ = 0;
         double partialTick_ = 0;
         double timescale_ = 1;
-        std::uint32_t tickCount_ = 0;
         double accumulatedTime_ = 0;
+        std::uint32_t tickCount_ = 0;
         std::uint32_t accumulatedFrames_ = 0;
         std::uint32_t framesPerSecond_ = 0;
     public:

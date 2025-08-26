@@ -58,8 +58,8 @@ namespace sandbox::gl {
     };
 
     export class CommandBuffer {
-        bool isInRenderPass_ = false;
         GraphicsPipeline* graphicsPipeline_ = nullptr;
+        bool isInRenderPass_ = false;
     public:
         void beginRenderPass(const RenderingInfo& renderingInfo) {
             assert(!isInRenderPass_);

@@ -29,6 +29,7 @@ endif ()
 target_sources(sandbox PRIVATE FILE_SET CXX_MODULES BASE_DIRS .
         FILES
         src/camera.ixx
+        src/client.ixx
         src/dialog.ixx
         src/io.ixx
         src/log.ixx
