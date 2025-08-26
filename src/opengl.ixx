@@ -60,7 +60,6 @@ namespace sandbox::gl {
     export class CommandBuffer {
         bool isInRenderPass_ = false;
         GraphicsPipeline* graphicsPipeline_ = nullptr;
-        std::vector<GLuint> uniformBufferBinding_{};
     public:
         void beginRenderPass(const RenderingInfo& renderingInfo) {
             assert(!isInRenderPass_);
@@ -112,7 +111,7 @@ namespace sandbox::gl {
             graphicsPipeline_ = graphicsPipeline;
         }
 
-        void bindDescriptorSet(const DescriptorSet& set) {
+        void bindDescriptorSet(const DescriptorSet& set) const {
             assert(isInRenderPass_);
             for (const auto& [binding, descriptor] : set.descriptors()) {
                 switch (descriptor->type()) {
@@ -120,7 +119,6 @@ namespace sandbox::gl {
                         const auto& info = dynamic_cast<UniformBufferDescriptor*>(descriptor)->info();
                         assert(info.buffer != nullptr);
                         glBindBufferRange(GL_UNIFORM_BUFFER, binding, info.buffer->handle(), info.offset, info.range);
-                        uniformBufferBinding_.emplace_back(binding);
                         break;
                 }
             }
@@ -174,10 +172,6 @@ namespace sandbox::gl {
             glBindVertexArray(0);
             isInRenderPass_ = false;
             graphicsPipeline_ = nullptr;
-            for (const auto& binding : uniformBufferBinding_) {
-                glBindBufferBase(GL_UNIFORM_BUFFER, binding, 0);
-            }
-            uniformBufferBinding_.clear();
         }
     };
 }

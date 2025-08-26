@@ -6,7 +6,6 @@ namespace sandbox::timer {
     constexpr std::uint32_t MAX_TICKS_PER_FRAME = 100;
 
     export using getter_t = double (*)();
-    export using OnFpsUpdate = void (*)(std::uint32_t);
 
     export class FixedUpdateTimer {
         getter_t getter_;
@@ -20,7 +19,6 @@ namespace sandbox::timer {
         double accumulatedTime_ = 0;
         std::uint32_t accumulatedFrames_ = 0;
         std::uint32_t framesPerSecond_ = 0;
-        OnFpsUpdate onFpsUpdate_ = nullptr;
     public:
         explicit FixedUpdateTimer(const getter_t& getter, const double ticksPerSecond) :
             getter_(getter),
@@ -34,8 +32,6 @@ namespace sandbox::timer {
         [[nodiscard]] double timescale() const { return timescale_; }
         void setTimescale(const double timescale) { timescale_ = timescale; }
         [[nodiscard]] std::uint32_t tickCount() const { return tickCount_; }
-
-        void setFpsCallback(const OnFpsUpdate& onFpsUpdate) { onFpsUpdate_ = onFpsUpdate; }
 
         void advanceTime() {
             const auto currTime = currentTime();
@@ -53,9 +49,6 @@ namespace sandbox::timer {
             ++accumulatedFrames_;
             while (currentTime() - 1.0 >= accumulatedTime_) {
                 framesPerSecond_ = accumulatedFrames_;
-                if (onFpsUpdate_ != nullptr) {
-                    onFpsUpdate_(framesPerSecond_);
-                }
                 accumulatedTime_ += 1.0;
                 accumulatedFrames_ = 0;
             }

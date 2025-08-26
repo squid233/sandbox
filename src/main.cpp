@@ -11,6 +11,8 @@
 #include <glm/gtc/type_ptr.hpp>
 
 import std;
+import sandbox.camera;
+import sandbox.dialog;
 import sandbox.gl;
 import sandbox.gl.buffer;
 import sandbox.gl.descriptor;
@@ -18,21 +20,25 @@ import sandbox.gl.pipeline;
 import sandbox.io;
 import sandbox.log;
 import sandbox.timer;
-import sandbox.tinyfd;
+import sandbox.window;
 
 constexpr int WIDTH = 854;
 constexpr int HEIGHT = 480;
 GLFWwindow* window = nullptr;
+sandbox::Mouse* mouse = nullptr;
 int framebufferWidth = WIDTH;
 int framebufferHeight = HEIGHT;
 bool framebufferResized = false;
 constexpr bool VSYNC_ENABLED = false;
+constexpr double MOUSE_SENSITIVITY = 0.5;
 
 sandbox::timer::FixedUpdateTimer timer{glfwGetTime, 20};
 std::uint64_t gameTicks = 0;
 
 glm::dvec3 previousPosition{};
-glm::dvec3 position{};
+glm::dvec3 position{0, 0, 3};
+glm::dvec2 rotation{0, 90};
+sandbox::Camera camera{};
 
 struct Vertex {
     glm::vec3 position;
@@ -78,6 +84,16 @@ sandbox::gl::CommandBuffer commandBuffer{};
 
 void errorCallback(int errorCode, const char* description) noexcept {
     sandbox::log::error(std::format("GLFW error {}: {}", errorCode, description));
+}
+
+void cursorCallback(const sandbox::Mouse* mouse) {
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_TRUE) {
+        double pitch = rotation.x - mouse->deltaY() * MOUSE_SENSITIVITY;
+        double yaw = rotation.y + mouse->deltaX() * MOUSE_SENSITIVITY;
+        pitch = std::clamp(pitch, -90.0, 90.0);
+        yaw = std::fmod(yaw, 360.0);
+        rotation = {pitch, yaw};
+    }
 }
 
 #ifdef _DEBUG
@@ -195,7 +211,7 @@ bool initGL() {
     return true;
 }
 
-void tick() {
+void movePlayer() {
     previousPosition = position;
 
     double deltaX = 0, deltaY = 0, deltaZ = 0;
@@ -205,8 +221,16 @@ void tick() {
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) ++deltaX;
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) --deltaY;
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) ++deltaY;
-    constexpr double speed = 0.05;
-    position += speed * glm::dvec3(deltaX, deltaY, deltaZ);
+
+    const double speed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 0.7 : 0.3;
+    const double yawRadians = glm::radians(rotation.y);
+    const glm::dvec3 forward{std::cos(yawRadians), 0.0, std::sin(yawRadians)};
+    const glm::dvec3 right = glm::normalize(glm::dvec3(std::sin(yawRadians), 0.0, -std::cos(yawRadians)));
+    position += forward * deltaZ * speed + right * deltaX * speed + glm::dvec3(0.0, deltaY * speed, 0.0);
+}
+
+void tick() {
+    movePlayer();
 }
 
 void render(const double partialTick) {
@@ -217,6 +241,7 @@ void render(const double partialTick) {
     }
 
     const auto& lerpPosition = glm::vec3(glm::mix(previousPosition, position, partialTick));
+    camera.moveToEntity(lerpPosition, rotation);
 
     transformation.Projection = glm::perspective(
         glm::radians(70.0f),
@@ -224,11 +249,7 @@ void render(const double partialTick) {
         0.01f,
         100.0f
     );
-    transformation.View = glm::lookAt(
-        lerpPosition,
-        lerpPosition - glm::vec3(0, 0, 1),
-        glm::vec3(0.0f, 1.0f, 0.0f)
-    );
+    transformation.View = camera.viewMat();
     transformation.Model = glm::identity<glm::mat4>();
     std::memcpy(transformationBufferData, &transformation, sizeof(Transformation));
 
@@ -267,6 +288,7 @@ void dispose() {
     delete indexBuffer;
     delete pipeline;
 
+    mouse = nullptr;
     glfwDestroyWindow(window);
     glfwTerminate();
 }
@@ -288,7 +310,7 @@ int WINAPI WinMain(
     if (!glfwInit()) {
         const char* description;
         int error = glfwGetError(&description);
-        sandbox::tinyfd::errorMessageBox(std::format(R"(Failed to initialize GLFW
+        sandbox::dialog::errorMessageBox(std::format(R"(Failed to initialize GLFW
 GLFW error {}: {})", error, description).c_str());
         return -1;
     }
@@ -307,11 +329,14 @@ GLFW error {}: {})", error, description).c_str());
     if (window == nullptr) {
         const char* description;
         int error = glfwGetError(&description);
-        sandbox::tinyfd::errorMessageBox(std::format(R"(Failed to create GLFW window
+        sandbox::dialog::errorMessageBox(std::format(R"(Failed to create GLFW window
 GLFW error {}: {})", error, description).c_str());
         glfwTerminate();
         return -1;
     }
+
+    mouse = new sandbox::Mouse(window);
+    mouse->setCursorCallback(cursorCallback);
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow*, int, int) noexcept {
         framebufferResized = true;
     });
@@ -327,8 +352,8 @@ GLFW error {}: {})", error, description).c_str());
             glfwPollEvents();
             if (!glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
                 render(timer.partialTick());
+                timer.calculateFps();
             }
-            timer.calculateFps();
         }
     }
 
